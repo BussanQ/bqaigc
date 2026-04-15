@@ -4,8 +4,8 @@ Z-Image Studio 是一个本地运行的 AI 图像生成工作台，包含 FastAP
 
 ## 功能特性
 
-- 本地图像生成：基于 Diffusers `ZImagePipeline`。
-- 多模型选择：支持在后端配置多个本地模型路径。
+- 本地图像生成：基于 Diffusers Pipeline。
+- 多模型选择：支持在后端为不同模型配置不同的 Pipeline 类和本地模型路径。
 - 单任务生成：同一时间只运行一个生成任务，避免显存和状态冲突。
 - 生成进度：前端轮询后端进度，展示阶段、百分比和采样步数。
 - 可停止生成：生成过程中可请求停止当前任务。
@@ -63,15 +63,19 @@ AVAILABLE_MODELS = {
     "Z-Image-Turbo": {
         "label": "Z-Image-Turbo",
         "path": "D:/Dev/Model/aigc/Z-Image-Turbo",
+        "pipeline_module": "diffusers.pipelines.z_image.pipeline_z_image",
+        "pipeline_class": "ZImagePipeline",
     },
     "ERNIE-Image": {
         "label": "ERNIE-Image",
         "path": "D:/Dev/Model/aigc/ERNIE-Image",
+        "pipeline_module": "diffusers.pipelines.ernie_image.pipeline_ernie_image",
+        "pipeline_class": "ErnieImagePipeline",
     },
 }
 ```
 
-使用前请确认这些路径在本机存在，并且模型格式可被 `ZImagePipeline.from_pretrained()` 加载。
+使用前请确认这些路径在本机存在，并且模型格式可被对应的 Pipeline `from_pretrained()` 加载。
 
 ## 安装与运行
 
@@ -96,7 +100,7 @@ python zimage-codex.py
 http://127.0.0.1:7860
 ```
 
-启动时会尝试加载默认模型。
+启动时不会自动加载模型；请在前端模型管理区域手动启动需要的模型。
 
 ### 3. 启动前端开发服务器
 

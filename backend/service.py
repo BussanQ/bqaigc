@@ -4,21 +4,37 @@ import gc
 import random
 import threading
 import time
-from typing import Final
+from importlib import import_module
+from typing import Any, Final, Protocol, TypedDict, cast
 
 import torch
-from diffusers import ZImagePipeline
 from PIL import Image
 
+class PipelineClass(Protocol):
+    @classmethod
+    def from_pretrained(cls, model_path: str, **kwargs: object) -> Any: ...
+
+
+class ModelConfig(TypedDict):
+    label: str
+    path: str
+    pipeline_module: str
+    pipeline_class: str
+
+
 DEFAULT_MODEL_ID: Final = "Z-Image-Turbo"
-AVAILABLE_MODELS: Final[dict[str, dict[str, str]]] = {
+AVAILABLE_MODELS: Final[dict[str, ModelConfig]] = {
     "Z-Image-Turbo": {
         "label": "Z-Image-Turbo",
         "path": "D:/Dev/Model/aigc/Z-Image-Turbo",
+        "pipeline_module": "diffusers.pipelines.z_image.pipeline_z_image",
+        "pipeline_class": "ZImagePipeline",
     },
     "ERNIE-Image": {
         "label": "ERNIE-Image",
         "path": "D:/Dev/Model/aigc/ERNIE-Image",
+        "pipeline_module": "diffusers.pipelines.ernie_image.pipeline_ernie_image",
+        "pipeline_class": "ErnieImagePipeline",
     },
 }
 DEFAULT_RATIO: Final = "16:9"
@@ -71,7 +87,7 @@ _MODEL_STATE: dict[str, object | None] = {
     "is_busy": False,
     "updated_at": None,
 }
-_pipe: ZImagePipeline | None = None
+_pipe: Any | None = None
 
 
 class GenerationStopped(Exception):
@@ -96,12 +112,6 @@ def _update_progress(**changes: object | None) -> None:
         _PROGRESS_STATE["updated_at"] = time.time()
 
 
-def _update_model_state(**changes: object | None) -> None:
-    with _MODEL_LOCK:
-        _MODEL_STATE.update(changes)
-        _MODEL_STATE["updated_at"] = time.time()
-
-
 def _release_cuda_memory() -> None:
     gc.collect()
     if torch.cuda.is_available():
@@ -110,6 +120,12 @@ def _release_cuda_memory() -> None:
             torch.cuda.ipc_collect()
         except Exception:
             pass
+
+
+def _get_pipeline_class(model: ModelConfig) -> PipelineClass:
+    module = import_module(model["pipeline_module"])
+    pipeline_class = getattr(module, model["pipeline_class"])
+    return cast(PipelineClass, pipeline_class)
 
 
 def get_progress_snapshot() -> dict[str, object | None]:
@@ -150,20 +166,7 @@ def request_stop() -> None:
         _update_progress(status="stopping", message="正在停止当前生成，请稍候…")
 
 
-def ensure_default_model_loaded() -> None:
-    try:
-        load_model(DEFAULT_MODEL_ID)
-    except Exception as error:
-        _update_model_state(
-            status="error",
-            current_model=None,
-            current_model_path=None,
-            message=f"默认模型加载失败：{error}",
-            is_busy=False,
-        )
-
-
-def get_loaded_pipeline_or_raise() -> ZImagePipeline:
+def get_loaded_pipeline_or_raise() -> Any:
     with _MODEL_LOCK:
         if _pipe is None or _MODEL_STATE["status"] != "loaded":
             message = str(_MODEL_STATE.get("message") or "模型尚未加载。")
@@ -183,7 +186,7 @@ def load_model(model_id: str) -> dict[str, object | None]:
 
     model = AVAILABLE_MODELS[model_id]
     model_path = model["path"]
-    old_pipe: ZImagePipeline | None = None
+    old_pipe: Any | None = None
     try:
         with _MODEL_LOCK:
             if _pipe is not None and _MODEL_STATE["current_model"] == model_id:
@@ -216,7 +219,8 @@ def load_model(model_id: str) -> dict[str, object | None]:
 
         del old_pipe
         _release_cuda_memory()
-        new_pipe = ZImagePipeline.from_pretrained(
+        pipeline_class = _get_pipeline_class(model)
+        new_pipe = pipeline_class.from_pretrained(
             model_path,
             torch_dtype=torch.bfloat16,
             low_cpu_mem_usage=False,
@@ -258,7 +262,7 @@ def unload_model() -> dict[str, object | None]:
     if not _MODEL_OPERATION_LOCK.acquire(blocking=False):
         raise ModelOperationBusy("已有模型操作正在进行，请稍候。")
 
-    old_pipe: ZImagePipeline | None = None
+    old_pipe: Any | None = None
     try:
         with _MODEL_LOCK:
             if _pipe is None:

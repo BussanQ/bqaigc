@@ -30,11 +30,6 @@ class ModelLoadRequest(BaseModel):
     model_id: str
 
 
-@app.on_event("startup")
-def load_default_model() -> None:
-    service.ensure_default_model_loaded()
-
-
 @app.get("/api/health")
 def healthcheck() -> dict[str, object | None]:
     return {"status": "ok", "model": service.get_model_snapshot()}

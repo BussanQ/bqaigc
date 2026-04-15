@@ -43,7 +43,7 @@ This is a local Z-Image Studio app with a FastAPI backend and a Vite/TypeScript 
 
 - `zimage-codex.py` is the backend entrypoint. It imports `backend.api:app` and runs Uvicorn on `127.0.0.1:7860`.
 - `backend/api.py` defines the HTTP API and request validation. It exposes health/config/model/progress/generation endpoints under `/api/*` and serves `front/dist/` as static files when that build output exists.
-- `backend/service.py` owns model configuration, model lifecycle, generation state, progress state, and image generation. It loads Diffusers `ZImagePipeline` models from local paths in `AVAILABLE_MODELS`, moves the pipeline to CUDA, and generates PNG responses through `backend/api.py`.
+- `backend/service.py` owns model configuration, model lifecycle, generation state, progress state, and image generation. Each `AVAILABLE_MODELS` entry names its local model path and Diffusers Pipeline import target; models are loaded on demand, moved to CUDA, and generate PNG responses through `backend/api.py`.
 - Generation is intentionally single-job: `GENERATION_LOCK` prevents concurrent generations, `_STOP_EVENT` is checked in the Diffusers step callback, and model load/unload is guarded by `_MODEL_OPERATION_LOCK` so model lifecycle operations do not overlap with generation.
 - Progress is pull-based. The generation callback updates `_PROGRESS_STATE`; the frontend polls `/api/progress` during active generation.
 
@@ -58,5 +58,5 @@ This is a local Z-Image Studio app with a FastAPI backend and a Vite/TypeScript 
 ## Important runtime assumptions
 
 - The backend assumes CUDA is available and calls `new_pipe.to("cuda")` plus `torch.Generator("cuda")`.
-- Model paths are currently hardcoded in `backend/service.py` as local Windows paths. Changing model availability usually requires editing `AVAILABLE_MODELS` unless configuration support is added.
+- Model paths and Pipeline import targets are currently hardcoded in `backend/service.py`. Changing model availability usually requires editing `AVAILABLE_MODELS` unless configuration support is added.
 - API responses and UI copy are primarily Chinese; preserve that unless intentionally changing product language.
