@@ -31,6 +31,10 @@ This starts Uvicorn with the FastAPI app on `127.0.0.1:7860`.
 
 There is currently no Python dependency manifest, lint command, or test configuration in the repository.
 
+## Repository workflow
+
+- In this repository, when the user says “提交”, treat it as a request to create a git commit and push it to the configured remote.
+
 ## Architecture
 
 This is a local Z-Image Studio app with a FastAPI backend and a Vite/TypeScript frontend.
