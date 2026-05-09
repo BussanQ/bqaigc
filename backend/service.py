@@ -187,6 +187,11 @@ def load_model(model_id: str) -> dict[str, object | None]:
     model = AVAILABLE_MODELS[model_id]
     model_path = model["path"]
     old_pipe: Any | None = None
+    old_model_id: str | None = None
+    old_model_path: str | None = None
+    new_pipe: Any | None = None
+    restored_pipe: Any | None = None
+    is_switching = False
     try:
         with _MODEL_LOCK:
             if _pipe is not None and _MODEL_STATE["current_model"] == model_id:
@@ -200,13 +205,20 @@ def load_model(model_id: str) -> dict[str, object | None]:
                 )
                 return dict(_MODEL_STATE)
 
-            status = "switching" if _pipe is not None else "loading"
+            is_switching = _pipe is not None
+            status = "switching" if is_switching else "loading"
             message = (
                 f"正在切换到模型 {model['label']}…"
-                if status == "switching"
+                if is_switching
                 else f"正在加载模型 {model['label']}…"
             )
             old_pipe = _pipe
+            old_model_id = str(_MODEL_STATE["current_model"]) if _MODEL_STATE["current_model"] else None
+            old_model_path = (
+                str(_MODEL_STATE["current_model_path"])
+                if _MODEL_STATE["current_model_path"]
+                else None
+            )
             _pipe = None
             _MODEL_STATE.update(
                 status=status,
@@ -217,8 +229,11 @@ def load_model(model_id: str) -> dict[str, object | None]:
                 updated_at=time.time(),
             )
 
-        del old_pipe
-        _release_cuda_memory()
+        if old_pipe is not None:
+            del old_pipe
+            old_pipe = None
+            _release_cuda_memory()
+
         pipeline_class = _get_pipeline_class(model)
         new_pipe = pipeline_class.from_pretrained(
             model_path,
@@ -229,6 +244,7 @@ def load_model(model_id: str) -> dict[str, object | None]:
 
         with _MODEL_LOCK:
             _pipe = new_pipe
+            new_pipe = None
             _MODEL_STATE.update(
                 status="loaded",
                 current_model=model_id,
@@ -239,6 +255,62 @@ def load_model(model_id: str) -> dict[str, object | None]:
             )
             return dict(_MODEL_STATE)
     except Exception as error:
+        if new_pipe is not None:
+            del new_pipe
+            new_pipe = None
+            _release_cuda_memory()
+
+        if is_switching and old_model_id is not None:
+            old_model = AVAILABLE_MODELS.get(old_model_id)
+            if old_model is not None:
+                try:
+                    with _MODEL_LOCK:
+                        _MODEL_STATE.update(
+                            status="recovering",
+                            message="模型切换失败，正在重新加载旧模型…",
+                            is_busy=True,
+                            updated_at=time.time(),
+                        )
+
+                    restored_pipeline_class = _get_pipeline_class(old_model)
+                    restored_pipe = restored_pipeline_class.from_pretrained(
+                        old_model["path"],
+                        torch_dtype=torch.bfloat16,
+                        low_cpu_mem_usage=False,
+                    )
+                    restored_pipe.to("cuda")
+
+                    with _MODEL_LOCK:
+                        _pipe = restored_pipe
+                        restored_pipe = None
+                        _MODEL_STATE.update(
+                            status="loaded",
+                            current_model=old_model_id,
+                            current_model_path=old_model_path or old_model["path"],
+                            message=f"已重新加载旧模型，切换失败：{error}",
+                            is_busy=False,
+                            updated_at=time.time(),
+                        )
+                except Exception as restore_error:
+                    if restored_pipe is not None:
+                        del restored_pipe
+                        restored_pipe = None
+                        _release_cuda_memory()
+                    with _MODEL_LOCK:
+                        _pipe = None
+                        _MODEL_STATE.update(
+                            status="error",
+                            current_model=None,
+                            current_model_path=None,
+                            message=(
+                                f"模型切换失败，重新加载旧模型也失败：{error}；"
+                                f"恢复错误：{restore_error}"
+                            ),
+                            is_busy=False,
+                            updated_at=time.time(),
+                        )
+                raise
+
         with _MODEL_LOCK:
             _pipe = None
             _MODEL_STATE.update(
@@ -251,8 +323,16 @@ def load_model(model_id: str) -> dict[str, object | None]:
             )
         raise
     finally:
+        if old_pipe is not None:
+            del old_pipe
+            _release_cuda_memory()
+        if new_pipe is not None:
+            del new_pipe
+            _release_cuda_memory()
+        if restored_pipe is not None:
+            del restored_pipe
+            _release_cuda_memory()
         _MODEL_OPERATION_LOCK.release()
-
 
 def unload_model() -> dict[str, object | None]:
     global _pipe
