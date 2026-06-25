@@ -139,6 +139,12 @@ def generate_image(payload: GenerateRequest):
         )
     except service.ModelNotReady as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(
+            status_code=500, detail=f"生成失败：{error}"
+        ) from error
     finally:
         service.GENERATION_LOCK.release()
 

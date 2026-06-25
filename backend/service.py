@@ -448,7 +448,7 @@ def generate_image_from_z(
         return callback_kwargs
 
     try:
-        image = current_pipe(
+        result = current_pipe(
             prompt=prompt,
             negative_prompt=NEGATIVE_PROMPT,
             height=height,
@@ -457,7 +457,11 @@ def generate_image_from_z(
             guidance_scale=normalized_guidance,
             generator=generator,
             callback_on_step_end=_stop_callback,
-        ).images[0]
+        )
+        images = getattr(result, "images", None)
+        if not images:
+            raise RuntimeError("模型未返回任何图像，请检查模型与输入参数。")
+        image = images[0]
         _update_progress(
             status="completed",
             message="生成完成。",

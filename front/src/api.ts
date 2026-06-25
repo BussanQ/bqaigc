@@ -8,6 +8,28 @@ import type {
   StopResponse,
 } from "./types";
 
+const DEFAULT_TIMEOUT_MS = 15000;
+const MODEL_OP_TIMEOUT_MS = 120000;
+
+async function fetchWithTimeout(
+  input: RequestInfo,
+  init: RequestInit = {},
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error("请求超时，请检查后端是否正常运行。");
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
 async function throwResponseError(response: Response): Promise<never> {
   let message = `请求失败（${response.status}）`;
 
@@ -26,7 +48,7 @@ async function throwResponseError(response: Response): Promise<never> {
 }
 
 export async function fetchConfig(): Promise<AppConfig> {
-  const response = await fetch("/api/config");
+  const response = await fetchWithTimeout("/api/config");
   if (!response.ok) {
     await throwResponseError(response);
   }
@@ -34,7 +56,7 @@ export async function fetchConfig(): Promise<AppConfig> {
 }
 
 export async function fetchModels(): Promise<ModelsResponse> {
-  const response = await fetch("/api/models", {
+  const response = await fetchWithTimeout("/api/models", {
     cache: "no-store",
   });
   if (!response.ok) {
@@ -46,13 +68,17 @@ export async function fetchModels(): Promise<ModelsResponse> {
 export async function loadModel(
   payload: ModelLoadPayload,
 ): Promise<ModelState> {
-  const response = await fetch("/api/models/load", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
+  const response = await fetchWithTimeout(
+    "/api/models/load",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
     },
-    body: JSON.stringify(payload),
-  });
+    MODEL_OP_TIMEOUT_MS,
+  );
   if (!response.ok) {
     await throwResponseError(response);
   }
@@ -60,9 +86,13 @@ export async function loadModel(
 }
 
 export async function unloadModel(): Promise<ModelState> {
-  const response = await fetch("/api/models/unload", {
-    method: "POST",
-  });
+  const response = await fetchWithTimeout(
+    "/api/models/unload",
+    {
+      method: "POST",
+    },
+    MODEL_OP_TIMEOUT_MS,
+  );
   if (!response.ok) {
     await throwResponseError(response);
   }
@@ -91,7 +121,7 @@ export async function generateImage(
 }
 
 export async function stopGeneration(): Promise<StopResponse> {
-  const response = await fetch("/api/stop", {
+  const response = await fetchWithTimeout("/api/stop", {
     method: "POST",
   });
   if (!response.ok) {
@@ -101,7 +131,7 @@ export async function stopGeneration(): Promise<StopResponse> {
 }
 
 export async function fetchProgress(): Promise<ProgressSnapshot> {
-  const response = await fetch("/api/progress", {
+  const response = await fetchWithTimeout("/api/progress", {
     cache: "no-store",
   });
   if (!response.ok) {

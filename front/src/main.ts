@@ -352,6 +352,10 @@ const state: ViewState = {
 let progressPollingTimer: number | null = null;
 let isSyncingProgress = false;
 
+const PROGRESS_POLL_INTERVAL_MS = 700;
+let lastProgressSignature: string | null = null;
+let lastModelSignature: string | null = null;
+
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -421,6 +425,19 @@ function renderProgress(): void {
   const percent = `${Math.round(clampNumber(progress.progress, 0, 100))}%`;
   const stepText = formatStepText(progress);
 
+  const signature = [
+    progress.status,
+    percent,
+    progress.message,
+    stepText,
+    state.isGenerating ? "1" : "0",
+    state.isStopping ? "1" : "0",
+  ].join("|");
+  if (signature === lastProgressSignature) {
+    return;
+  }
+  lastProgressSignature = signature;
+
   activityTitle.textContent = meta.title;
   activityBadge.textContent = meta.badge;
   activityBadge.dataset.status = progress.status;
@@ -452,6 +469,19 @@ function renderModelState(): void {
   const selectedDiffers = Boolean(
     selectedModel && modelState.current_model && selectedModel !== modelState.current_model,
   );
+
+  const signature = [
+    modelState.status,
+    modelState.current_model ?? "",
+    modelState.current_model_path ?? "",
+    modelState.message,
+    selectedModel,
+    isModelOperationActive() ? "1" : "0",
+  ].join("|");
+  if (signature === lastModelSignature) {
+    return;
+  }
+  lastModelSignature = signature;
 
   modelTitle.textContent = modelState.current_model
     ? `${meta.title} · ${modelState.current_model}`
@@ -524,8 +554,13 @@ function updateActionState(): void {
 
 function setCurrentImage(blob: Blob): void {
   revokeCurrentImageUrl();
-  state.currentImageUrl = URL.createObjectURL(blob);
-  resultImage.src = state.currentImageUrl;
+  try {
+    state.currentImageUrl = URL.createObjectURL(blob);
+    resultImage.src = state.currentImageUrl;
+  } catch (error) {
+    state.currentImageUrl = null;
+    setStatus(`图像预览创建失败：${getErrorMessage(error)}`, "error");
+  }
   updateResultState();
 }
 
@@ -623,7 +658,12 @@ function toggleFullscreen(): void {
     return;
   }
 
-  void resultStage.requestFullscreen?.();
+  const request = resultStage.requestFullscreen?.();
+  if (request) {
+    request.catch((error: unknown) => {
+      setStatus(`无法进入全屏：${getErrorMessage(error)}`, "error");
+    });
+  }
 }
 
 function getErrorMessage(error: unknown): string {
@@ -706,7 +746,7 @@ function startProgressPolling(): void {
   void syncProgressSnapshot();
   progressPollingTimer = window.setInterval(() => {
     void syncProgressSnapshot();
-  }, 450);
+  }, PROGRESS_POLL_INTERVAL_MS);
 }
 
 function stopProgressPolling(): void {
