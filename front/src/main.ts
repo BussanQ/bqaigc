@@ -30,6 +30,16 @@ interface ViewState {
   progress: ProgressSnapshot;
 }
 
+interface SavedParameters {
+  prompt: string;
+  ratio: string;
+  steps: number;
+  guidanceScale: number;
+  seed: number;
+}
+
+const PARAMETERS_STORAGE_KEY = "zimage-studio.parameters.v1";
+
 const DEFAULT_PROGRESS: ProgressSnapshot = {
   status: "idle",
   message: "准备就绪，可开始生成。",
@@ -183,8 +193,11 @@ root.innerHTML = `
         </section>
 
         <label class="field field-prompt" for="prompt-input">
-          <span class="field-label">提示词</span>
-          <textarea id="prompt-input" rows="4"></textarea>
+          <span class="field-label-row">
+            <span class="field-label">提示词</span>
+            <span id="prompt-count" class="field-count">0 / 2000</span>
+          </span>
+          <textarea id="prompt-input" rows="4" maxlength="2000"></textarea>
         </label>
 
         <div class="helper-note"><strong>Prompt 结构：</strong>主体 + 场景 + 光线 + 镜头语言 + 材质 + 风格关键词，通常比只堆风格词更稳定。</div>
@@ -193,6 +206,7 @@ root.innerHTML = `
           <label class="field" for="ratio-input">
             <span class="field-label">宽高比</span>
             <select id="ratio-input" disabled></select>
+            <span id="ratio-presets" class="ratio-presets" aria-label="常用宽高比"></span>
           </label>
 
           <label class="field" for="steps-input">
@@ -222,9 +236,10 @@ root.innerHTML = `
           </label>
         </div>
 
-        <div class="action-row">
+        <div class="action-row action-row-primary">
           <button id="generate-btn" class="btn btn-primary" type="button" disabled>生成图像</button>
           <button id="stop-btn" class="btn btn-stop" type="button" disabled>停止</button>
+          <button id="reset-btn" class="btn btn-secondary" type="button" disabled>恢复默认</button>
         </div>
 
         <section class="activity-card" aria-live="polite">
@@ -237,7 +252,7 @@ root.innerHTML = `
           </div>
 
           <div class="activity-progress-row">
-            <div class="progress-track">
+            <div id="activity-progress" class="progress-track" role="progressbar" aria-label="生成进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
               <div id="progress-fill" class="progress-fill"></div>
             </div>
             <span id="progress-percent" class="progress-percent">0%</span>
@@ -274,7 +289,7 @@ root.innerHTML = `
                 <p id="loading-message" class="loading-message">正在准备模型输入…</p>
                 <div class="loading-progress-row">
                   <span id="loading-percent" class="loading-percent">0%</span>
-                  <div class="progress-track progress-track-strong">
+                  <div id="loading-progress" class="progress-track progress-track-strong" role="progressbar" aria-label="当前生成进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
                     <div id="loading-progress-fill" class="progress-fill"></div>
                   </div>
                 </div>
@@ -309,7 +324,9 @@ const modelPath = getElement<HTMLSpanElement>("#model-path");
 const loadModelButton = getElement<HTMLButtonElement>("#load-model-btn");
 const unloadModelButton = getElement<HTMLButtonElement>("#unload-model-btn");
 const promptInput = getElement<HTMLTextAreaElement>("#prompt-input");
+const promptCount = getElement<HTMLSpanElement>("#prompt-count");
 const ratioInput = getElement<HTMLSelectElement>("#ratio-input");
+const ratioPresets = getElement<HTMLSpanElement>("#ratio-presets");
 const stepsInput = getElement<HTMLInputElement>("#steps-input");
 const stepsValue = getElement<HTMLSpanElement>("#steps-value");
 const guidanceInput = getElement<HTMLInputElement>("#guidance-input");
@@ -318,6 +335,7 @@ const seedInput = getElement<HTMLInputElement>("#seed-input");
 const seedButton = getElement<HTMLButtonElement>("#seed-btn");
 const generateButton = getElement<HTMLButtonElement>("#generate-btn");
 const stopButton = getElement<HTMLButtonElement>("#stop-btn");
+const resetButton = getElement<HTMLButtonElement>("#reset-btn");
 const downloadButton = getElement<HTMLButtonElement>("#download-btn");
 const fullscreenButton = getElement<HTMLButtonElement>("#fullscreen-btn");
 const resultStage = getElement<HTMLDivElement>("#result-stage");
@@ -328,6 +346,7 @@ const statusNote = getElement<HTMLDivElement>("#status-note");
 const activityTitle = getElement<HTMLElement>("#activity-title");
 const activityBadge = getElement<HTMLElement>("#activity-badge");
 const progressFill = getElement<HTMLDivElement>("#progress-fill");
+const activityProgress = getElement<HTMLDivElement>("#activity-progress");
 const progressPercent = getElement<HTMLSpanElement>("#progress-percent");
 const progressMessage = getElement<HTMLSpanElement>("#progress-message");
 const progressStep = getElement<HTMLSpanElement>("#progress-step");
@@ -336,6 +355,7 @@ const loadingTitle = getElement<HTMLElement>("#loading-title");
 const loadingMessage = getElement<HTMLParagraphElement>("#loading-message");
 const loadingPercent = getElement<HTMLSpanElement>("#loading-percent");
 const loadingProgressFill = getElement<HTMLDivElement>("#loading-progress-fill");
+const loadingProgress = getElement<HTMLDivElement>("#loading-progress");
 const loadingStep = getElement<HTMLSpanElement>("#loading-step");
 
 const state: ViewState = {
@@ -383,6 +403,74 @@ function setStatus(
 function syncSliderValues(): void {
   stepsValue.textContent = stepsInput.value;
   guidanceValue.textContent = Number(guidanceInput.value).toFixed(1);
+}
+
+function updatePromptCount(): void {
+  promptCount.textContent = `${promptInput.value.length} / ${promptInput.maxLength}`;
+}
+
+function saveParameters(): void {
+  if (!state.config) {
+    return;
+  }
+  const parameters: SavedParameters = {
+    prompt: promptInput.value,
+    ratio: ratioInput.value,
+    steps: Number(stepsInput.value),
+    guidanceScale: Number(guidanceInput.value),
+    seed: Number(seedInput.value),
+  };
+  localStorage.setItem(PARAMETERS_STORAGE_KEY, JSON.stringify(parameters));
+}
+
+function restoreParameters(): void {
+  if (!state.config) {
+    return;
+  }
+  try {
+    const raw = localStorage.getItem(PARAMETERS_STORAGE_KEY);
+    if (!raw) {
+      return;
+    }
+    const saved = JSON.parse(raw) as Partial<SavedParameters>;
+    promptInput.value = typeof saved.prompt === "string" ? saved.prompt : "";
+    if (state.config.aspect_ratios.some((option) => option.label === saved.ratio)) {
+      ratioInput.value = saved.ratio ?? state.config.defaults.ratio;
+    }
+    if (Number.isFinite(saved.steps)) {
+      stepsInput.value = String(clampNumber(Number(saved.steps), state.config.limits.steps.min, state.config.limits.steps.max));
+    }
+    if (Number.isFinite(saved.guidanceScale)) {
+      guidanceInput.value = String(clampNumber(Number(saved.guidanceScale), state.config.limits.guidance_scale.min, state.config.limits.guidance_scale.max));
+    }
+    if (Number.isFinite(saved.seed)) {
+      setSeedValue(clampNumber(Math.trunc(Number(saved.seed)), state.config.limits.seed.min, state.config.limits.seed.max));
+    }
+  } catch {
+    localStorage.removeItem(PARAMETERS_STORAGE_KEY);
+  }
+}
+
+function syncRatioPresets(): void {
+  for (const button of ratioPresets.querySelectorAll<HTMLButtonElement>("button")) {
+    button.dataset.active = String(button.dataset.ratio === ratioInput.value);
+  }
+}
+
+function resetParameters(): void {
+  if (!state.config) {
+    return;
+  }
+  promptInput.value = "";
+  ratioInput.value = state.config.defaults.ratio;
+  stepsInput.value = String(state.config.defaults.steps);
+  guidanceInput.value = String(state.config.defaults.guidance_scale);
+  setSeedValue(state.config.defaults.initial_seed);
+  localStorage.removeItem(PARAMETERS_STORAGE_KEY);
+  syncSliderValues();
+  syncRatioPresets();
+  updatePromptCount();
+  setStatus("创作参数已恢复默认值。", "idle");
 }
 
 function isModelOperationActive(): boolean {
@@ -442,6 +530,7 @@ function renderProgress(): void {
   activityBadge.textContent = meta.badge;
   activityBadge.dataset.status = progress.status;
   progressFill.style.width = percent;
+  activityProgress.setAttribute("aria-valuenow", String(Math.round(clampNumber(progress.progress, 0, 100))));
   progressPercent.textContent = percent;
   progressMessage.textContent = progress.message;
   progressStep.textContent = stepText;
@@ -451,6 +540,7 @@ function renderProgress(): void {
   loadingMessage.textContent = progress.message;
   loadingPercent.textContent = percent;
   loadingProgressFill.style.width = percent;
+  loadingProgress.setAttribute("aria-valuenow", String(Math.round(clampNumber(progress.progress, 0, 100))));
   loadingStep.textContent = stepText;
 
   resultStage.dataset.status = progress.status;
@@ -539,11 +629,15 @@ function updateActionState(): void {
 
   promptInput.disabled = generationControlsDisabled;
   ratioInput.disabled = generationControlsDisabled;
+  for (const button of ratioPresets.querySelectorAll<HTMLButtonElement>("button")) {
+    button.disabled = generationControlsDisabled;
+  }
   stepsInput.disabled = generationControlsDisabled;
   guidanceInput.disabled = generationControlsDisabled;
   seedInput.disabled = generationControlsDisabled;
   seedButton.disabled = generationControlsDisabled;
   generateButton.disabled = generationControlsDisabled;
+  resetButton.disabled = !configReady || state.isGenerating || modelBusy;
   stopButton.disabled = !state.isGenerating || state.isStopping;
 
   modelSelect.disabled = !modelsReady || state.isGenerating || modelBusy;
@@ -587,6 +681,21 @@ function populateRatioOptions(config: AppConfig): void {
   }
 
   ratioInput.value = config.defaults.ratio;
+  ratioPresets.innerHTML = "";
+  for (const option of config.aspect_ratios.slice(0, 5)) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "ratio-preset";
+    button.dataset.ratio = option.label;
+    button.textContent = option.label;
+    button.addEventListener("click", () => {
+      ratioInput.value = option.label;
+      syncRatioPresets();
+      saveParameters();
+    });
+    ratioPresets.append(button);
+  }
+  syncRatioPresets();
 }
 
 function readPayload(): GeneratePayload {
@@ -781,7 +890,11 @@ async function loadConfig(): Promise<void> {
     seedInput.step = String(config.limits.seed.step);
     setSeedValue(config.defaults.initial_seed);
 
+    restoreParameters();
+
     syncSliderValues();
+    syncRatioPresets();
+    updatePromptCount();
     setStatus("配置已加载，正在确认模型状态…", "loading");
   } catch (error) {
     setStatus(`加载配置失败：${getErrorMessage(error)}`, "error");
@@ -975,7 +1088,22 @@ unloadModelButton.addEventListener("click", () => {
 });
 stepsInput.addEventListener("input", syncSliderValues);
 guidanceInput.addEventListener("input", syncSliderValues);
-seedButton.addEventListener("click", assignRandomSeed);
+promptInput.addEventListener("input", () => {
+  updatePromptCount();
+  saveParameters();
+});
+ratioInput.addEventListener("change", () => {
+  syncRatioPresets();
+  saveParameters();
+});
+for (const input of [stepsInput, guidanceInput, seedInput]) {
+  input.addEventListener("change", saveParameters);
+}
+seedButton.addEventListener("click", () => {
+  assignRandomSeed();
+  saveParameters();
+});
+resetButton.addEventListener("click", resetParameters);
 generateButton.addEventListener("click", () => {
   void handleGenerate();
 });
