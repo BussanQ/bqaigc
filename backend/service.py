@@ -5,7 +5,7 @@ import random
 import threading
 import time
 from importlib import import_module
-from typing import Any, Final, Protocol, TypedDict, cast
+from typing import Any, Final, NotRequired, Protocol, TypedDict, cast
 
 import torch
 from PIL import Image
@@ -20,6 +20,10 @@ class ModelConfig(TypedDict):
     path: str
     pipeline_module: str
     pipeline_class: str
+    default_steps: NotRequired[int]
+    max_steps: NotRequired[int]
+    aspect_ratios: NotRequired[dict[str, tuple[int, int]]]
+    guidance_parameter: NotRequired[str]
 
 
 DEFAULT_MODEL_ID: Final = "Z-Image-Turbo"
@@ -36,12 +40,33 @@ AVAILABLE_MODELS: Final[dict[str, ModelConfig]] = {
         "pipeline_module": "diffusers.pipelines.ernie_image.pipeline_ernie_image",
         "pipeline_class": "ErnieImagePipeline",
     },
+    "Qwen-Image-2.1": {
+        "label": "Qwen-Image-2.1",
+        "path": "D:/Dev/Model/aigc/Qwen-Image-2.1",
+        "pipeline_module": "diffusers",
+        "pipeline_class": "QwenImage21Pipeline",
+        "default_steps": 40,
+        "max_steps": 50,
+        "guidance_parameter": "true_cfg_scale",
+        "aspect_ratios": {
+            "1:1": (2048, 2048),
+            "4:3": (2400, 1792),
+            "3:4": (1792, 2400),
+            "3:2": (2528, 1696),
+            "2:3": (1696, 2528),
+            "16:9": (2752, 1536),
+            "9:16": (1536, 2752),
+        },
+    },
 }
 DEFAULT_RATIO: Final = "16:9"
 DEFAULT_STEPS: Final = 8
 DEFAULT_GUIDANCE_SCALE: Final = 1.0
 MIN_STEPS: Final = 4
 MAX_STEPS: Final = 20
+MAX_MODEL_STEPS: Final = max(
+    model.get("max_steps", MAX_STEPS) for model in AVAILABLE_MODELS.values()
+)
 STEPS_STEP: Final = 1
 MIN_GUIDANCE_SCALE: Final = 0.0
 MAX_GUIDANCE_SCALE: Final = 3.0
@@ -124,8 +149,32 @@ def _release_cuda_memory() -> None:
 
 def _get_pipeline_class(model: ModelConfig) -> PipelineClass:
     module = import_module(model["pipeline_module"])
-    pipeline_class = getattr(module, model["pipeline_class"])
+    try:
+        pipeline_class = getattr(module, model["pipeline_class"])
+    except (AttributeError, ImportError) as error:
+        if model["pipeline_class"] == "QwenImage21Pipeline":
+            raise RuntimeError(
+                "Qwen-Image-2.1 需要支持 QwenImage21Pipeline 的 Diffusers 源码版"
+                "及 transformers>=5.17，请按 README 更新后端环境。"
+            ) from error
+        raise
     return cast(PipelineClass, pipeline_class)
+
+
+def get_generation_settings(model_id: str | None = None) -> dict[str, Any]:
+    if model_id is None:
+        with _MODEL_LOCK:
+            model_id = str(_MODEL_STATE["current_model"] or DEFAULT_MODEL_ID)
+    if model_id not in AVAILABLE_MODELS:
+        raise UnknownModel(f"未知模型：{model_id}")
+    model = AVAILABLE_MODELS[model_id]
+    return {
+        "model_id": model_id,
+        "aspect_ratios": model.get("aspect_ratios", ASPECT_RATIOS),
+        "default_steps": model.get("default_steps", DEFAULT_STEPS),
+        "max_steps": model.get("max_steps", MAX_STEPS),
+        "guidance_parameter": model.get("guidance_parameter", "guidance_scale"),
+    }
 
 
 def get_progress_snapshot() -> dict[str, object | None]:
@@ -397,10 +446,12 @@ def generate_image_from_z(
     guidance_scale: float,
     seed: int,
 ) -> Image.Image | None:
-    if ratio not in ASPECT_RATIOS:
-        raise ValueError(f"Unsupported ratio: {ratio}")
-
     current_pipe = get_loaded_pipeline_or_raise()
+    settings = get_generation_settings()
+    if ratio not in settings["aspect_ratios"]:
+        raise ValueError(f"当前模型不支持宽高比：{ratio}")
+    if not MIN_STEPS <= steps <= settings["max_steps"]:
+        raise ValueError(f"当前模型采样步数必须在 {MIN_STEPS}–{settings['max_steps']} 之间。")
     total_steps = max(int(steps), 1)
     normalized_seed = int(seed)
     normalized_guidance = float(guidance_scale)
@@ -417,7 +468,7 @@ def generate_image_from_z(
         seed=normalized_seed,
     )
 
-    width, height = ASPECT_RATIOS[ratio]
+    width, height = settings["aspect_ratios"][ratio]
     generator = torch.Generator("cuda").manual_seed(normalized_seed)
 
     def _stop_callback(_pipe, step: int, timestep: int, callback_kwargs: dict):
@@ -454,7 +505,7 @@ def generate_image_from_z(
             height=height,
             width=width,
             num_inference_steps=total_steps,
-            guidance_scale=normalized_guidance,
+            **{settings["guidance_parameter"]: normalized_guidance},
             generator=generator,
             callback_on_step_end=_stop_callback,
         )

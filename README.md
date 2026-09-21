@@ -72,10 +72,37 @@ AVAILABLE_MODELS = {
         "pipeline_module": "diffusers.pipelines.ernie_image.pipeline_ernie_image",
         "pipeline_class": "ErnieImagePipeline",
     },
+    "Qwen-Image-2.1": {
+        "label": "Qwen-Image-2.1",
+        "path": "D:/Dev/Model/aigc/Qwen-Image-2.1",
+        "pipeline_module": "diffusers",
+        "pipeline_class": "QwenImage21Pipeline",
+        # 完整配置还包含模型专属步数、画幅和引导参数，见 backend/service.py。
+    },
 }
 ```
 
 使用前请确认这些路径在本机存在，并且模型格式可被对应的 Pipeline `from_pretrained()` 加载。
+
+### Qwen-Image-2.1
+
+接入依据：[官方模型页面](https://huggingface.co/Qwen/Qwen-Image-2.1)、[Diffusers 调用说明](https://huggingface.co/docs/diffusers/main/api/pipelines/qwenimage21)。
+
+- 使用 `QwenImage21Pipeline`，加载本地 `D:/Dev/Model/aigc/Qwen-Image-2.1`，保持 BF16 / CUDA 推理。
+- 加载模型后，界面自动切换为默认 40 步（可选 4–50 步），引导系数默认 1.0。后端将引导系数映射到 `true_cfg_scale`；大于 1 时结合现有负面提示词开启 CFG。
+- 提供官方七种 2K 画幅：1:1（2048×2048）、4:3（2400×1792）、3:4（1792×2400）、3:2（2528×1696）、2:3（1696×2528）、16:9（2752×1536）、9:16（1536×2752）。原有模型继续使用原来的画幅与步数范围。
+- 当前工作台接入文生图；可在提示词中描述 RGBA 透明背景，结果以 PNG 保存并保留 alpha 通道。参考图编辑尚无上传入口。
+
+官方要求 PyTorch >= 2.4.0、Transformers >= 5.17、支持该 Pipeline 的 Diffusers 源码版，以及 Accelerate / Pillow。请在 `D:/Dev/program/` 下的后端 Python 环境中更新依赖（不要安装到系统盘）；例如现有 `gpt` 环境可执行：
+
+```powershell
+$env:TEMP = "D:/Dev/program/pip-tmp"
+$env:TMP = $env:TEMP
+New-Item -ItemType Directory -Force -Path $env:TEMP | Out-Null
+& D:/Dev/program/miniconda3/envs/gpt/python.exe -m pip install --cache-dir D:/Dev/program/pip-cache -U "transformers>=5.17" accelerate pillow "git+https://github.com/huggingface/diffusers"
+```
+
+保留环境中已有且符合要求的 CUDA 版 PyTorch。更新完成后重启后端，再选择并启动 Qwen-Image-2.1。
 
 ## 安装与运行
 
@@ -147,7 +174,7 @@ npm run preview
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | `GET` | `/api/health` | 健康检查与模型状态 |
-| `GET` | `/api/config` | 获取前端配置、默认参数和参数范围 |
+| `GET` | `/api/config` | 获取当前模型配置；可用 `model_id` 查询指定模型的画幅、默认参数和范围 |
 | `GET` | `/api/models` | 获取可用模型与当前模型状态 |
 | `POST` | `/api/models/load` | 加载或切换模型 |
 | `POST` | `/api/models/unload` | 卸载当前模型并释放显存 |
@@ -162,7 +189,8 @@ npm run preview
 - 前端没有使用 React/Vue 等框架，主要逻辑集中在 `front/src/main.ts`。
 - 前端 API 调用统一封装在 `front/src/api.ts`。
 - 类型定义集中在 `front/src/types.ts`，需要与后端响应结构保持一致。
-- 当前没有配置自动化测试、Lint 或 Python 依赖文件。
+- 后端回归测试：`python -m unittest discover -s tests`，使用替代 Pipeline 验证接口、参数映射及停止行为，无需加载模型权重。
+- 当前没有配置 Lint 或 Python 依赖文件。
 
 ## 注意事项
 

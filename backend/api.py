@@ -19,7 +19,7 @@ app = FastAPI(title="Z-Image Studio")
 class GenerateRequest(BaseModel):
     prompt: str = Field(..., min_length=1)
     ratio: str
-    steps: int = Field(..., ge=service.MIN_STEPS, le=service.MAX_STEPS)
+    steps: int = Field(..., ge=service.MIN_STEPS, le=service.MAX_MODEL_STEPS)
     guidance_scale: float = Field(
         ..., ge=service.MIN_GUIDANCE_SCALE, le=service.MAX_GUIDANCE_SCALE
     )
@@ -36,15 +36,20 @@ def healthcheck() -> dict[str, object | None]:
 
 
 @app.get("/api/config")
-def get_config() -> dict:
+def get_config(model_id: str | None = None) -> dict:
+    try:
+        settings = service.get_generation_settings(model_id)
+    except service.UnknownModel as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
     return {
+        "model_id": settings["model_id"],
         "aspect_ratios": [
             {"label": label, "width": width, "height": height}
-            for label, (width, height) in service.ASPECT_RATIOS.items()
+            for label, (width, height) in settings["aspect_ratios"].items()
         ],
         "defaults": {
             "ratio": service.DEFAULT_RATIO,
-            "steps": service.DEFAULT_STEPS,
+            "steps": settings["default_steps"],
             "guidance_scale": service.DEFAULT_GUIDANCE_SCALE,
             "initial_seed": service.randomize_seed(),
             "prompt_placeholder": service.PROMPT_PLACEHOLDER,
@@ -52,7 +57,7 @@ def get_config() -> dict:
         "limits": {
             "steps": {
                 "min": service.MIN_STEPS,
-                "max": service.MAX_STEPS,
+                "max": settings["max_steps"],
                 "step": service.STEPS_STEP,
             },
             "guidance_scale": {
@@ -110,8 +115,6 @@ def generate_image(payload: GenerateRequest):
     prompt = payload.prompt.strip()
     if not prompt:
         raise HTTPException(status_code=422, detail="Prompt is required.")
-    if payload.ratio not in service.ASPECT_RATIOS:
-        raise HTTPException(status_code=422, detail="Unsupported ratio.")
     if not service.GENERATION_LOCK.acquire(blocking=False):
         raise HTTPException(
             status_code=409,
@@ -139,6 +142,8 @@ def generate_image(payload: GenerateRequest):
         )
     except service.ModelNotReady as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
     except HTTPException:
         raise
     except Exception as error:

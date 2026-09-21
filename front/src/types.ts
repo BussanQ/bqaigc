@@ -11,6 +11,7 @@ export interface AspectRatioOption {
 }
 
 export interface AppConfig {
+  model_id: string;
   aspect_ratios: AspectRatioOption[];
   defaults: {
     ratio: string;
@@ -44,6 +45,7 @@ export type ModelStatus =
   | "loaded"
   | "unloading"
   | "switching"
+  | "recovering"
   | "error";
 
 export interface ModelInfo {

@@ -47,8 +47,8 @@ async function throwResponseError(response: Response): Promise<never> {
   throw new Error(message);
 }
 
-export async function fetchConfig(): Promise<AppConfig> {
-  const response = await fetchWithTimeout("/api/config");
+export async function fetchConfig(modelId: string): Promise<AppConfig> {
+  const response = await fetchWithTimeout(`/api/config?model_id=${encodeURIComponent(modelId)}`);
   if (!response.ok) {
     await throwResponseError(response);
   }

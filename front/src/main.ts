@@ -31,6 +31,7 @@ interface ViewState {
 }
 
 interface SavedParameters {
+  modelId: string;
   prompt: string;
   ratio: string;
   steps: number;
@@ -130,6 +131,11 @@ const MODEL_STATUS_META: Record<
     title: "模型切换中",
     badge: "切换中",
     action: "切换中…",
+  },
+  recovering: {
+    title: "正在恢复模型",
+    badge: "恢复中",
+    action: "恢复中…",
   },
   error: {
     title: "模型异常",
@@ -499,6 +505,7 @@ function saveParameters(): void {
     return;
   }
   const parameters: SavedParameters = {
+    modelId: state.config.model_id,
     prompt: promptInput.value,
     ratio: ratioInput.value,
     steps: Number(stepsInput.value),
@@ -519,6 +526,13 @@ function restoreParameters(): void {
     }
     const saved = JSON.parse(raw) as Partial<SavedParameters>;
     promptInput.value = typeof saved.prompt === "string" ? saved.prompt : "";
+    if (Number.isFinite(saved.seed)) {
+      setSeedValue(clampNumber(Math.trunc(Number(saved.seed)), state.config.limits.seed.min, state.config.limits.seed.max));
+    }
+    // 旧版本缓存没有模型 ID，沿用到默认模型；切换模型时采用其推荐参数。
+    if ((saved.modelId ?? "Z-Image-Turbo") !== state.config.model_id) {
+      return;
+    }
     if (state.config.aspect_ratios.some((option) => option.label === saved.ratio)) {
       ratioInput.value = saved.ratio ?? state.config.defaults.ratio;
     }
@@ -527,9 +541,6 @@ function restoreParameters(): void {
     }
     if (Number.isFinite(saved.guidanceScale)) {
       guidanceInput.value = String(clampNumber(Number(saved.guidanceScale), state.config.limits.guidance_scale.min, state.config.limits.guidance_scale.max));
-    }
-    if (Number.isFinite(saved.seed)) {
-      setSeedValue(clampNumber(Math.trunc(Number(saved.seed)), state.config.limits.seed.min, state.config.limits.seed.max));
     }
   } catch {
     localStorage.removeItem(PARAMETERS_STORAGE_KEY);
@@ -564,7 +575,8 @@ function isModelOperationActive(): boolean {
     state.modelState.is_busy ||
     state.modelState.status === "loading" ||
     state.modelState.status === "unloading" ||
-    state.modelState.status === "switching"
+    state.modelState.status === "switching" ||
+    state.modelState.status === "recovering"
   );
 }
 
@@ -705,7 +717,10 @@ function updateResultState(): void {
 }
 
 function updateActionState(): void {
-  const configReady = Boolean(state.config);
+  const configReady = Boolean(
+    state.config && (!state.modelState.current_model ||
+      state.config.model_id === state.modelState.current_model),
+  );
   const modelsReady = Boolean(state.models?.available_models.length);
   const modelBusy = isModelOperationActive();
   const modelLoaded = isModelLoaded();
@@ -761,7 +776,7 @@ function populateRatioOptions(config: AppConfig): void {
   for (const option of config.aspect_ratios) {
     const element = document.createElement("option");
     element.value = option.label;
-    element.textContent = option.label;
+    element.textContent = `${option.label} · ${option.width} × ${option.height}`;
     ratioInput.append(element);
   }
 
@@ -907,6 +922,10 @@ async function syncModels(updateStatus = true): Promise<void> {
     state.modelState = response.state;
     populateModelOptions(response);
     renderModelState();
+    const configModelId = response.state.current_model || response.default_model_id;
+    if (state.config?.model_id !== configModelId) {
+      await loadConfig(configModelId);
+    }
 
     if (updateStatus && !state.isGenerating && state.config) {
       if (state.modelState.status === "loaded") {
@@ -952,10 +971,13 @@ function stopProgressPolling(): void {
   progressPollingTimer = null;
 }
 
-async function loadConfig(): Promise<void> {
+async function loadConfig(modelId: string): Promise<void> {
   try {
+    saveParameters();
+    state.config = null;
+    updateActionState();
     setStatus("正在加载配置…", "loading");
-    const config = await fetchConfig();
+    const config = await fetchConfig(modelId);
     state.config = config;
 
     populateRatioOptions(config);
@@ -981,7 +1003,10 @@ async function loadConfig(): Promise<void> {
     syncParameterHud();
     syncRatioPresets();
     updatePromptCount();
-    setStatus("配置已加载，正在确认模型状态…", "loading");
+    setStatus(
+      isModelLoaded() ? "模型与参数已就绪，可开始生成。" : "配置已加载，请启动模型。",
+      "idle",
+    );
   } catch (error) {
     setStatus(`加载配置失败：${getErrorMessage(error)}`, "error");
   } finally {
@@ -1154,7 +1179,7 @@ async function handleStop(): Promise<void> {
 
 async function initializeApp(): Promise<void> {
   renderModelState();
-  await Promise.allSettled([loadConfig(), syncModels()]);
+  await syncModels();
   await syncProgressSnapshot();
   updateActionState();
   updateResultState();
