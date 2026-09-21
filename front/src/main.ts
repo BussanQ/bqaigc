@@ -146,16 +146,33 @@ const root = app;
 
 root.innerHTML = `
   <main class="page-shell">
+    <div class="ambient-field" aria-hidden="true">
+      <span class="ambient-orb ambient-orb-a"></span>
+      <span class="ambient-orb ambient-orb-b"></span>
+      <span class="ambient-orb ambient-orb-c"></span>
+      <span class="ambient-beam"></span>
+    </div>
     <header class="hero-banner">
       <div class="hero-copy">
         <span class="hero-eyebrow">Z-Image Studio</span>
         <h1>独立前端工作台</h1>
         <p>保留当前 Python 生图后端能力，同时补上更细的忙碌态、真实步数进度和更顺滑的创作反馈。</p>
       </div>
-      <div class="hero-card">
-        <span class="hero-card-label">Render mode</span>
-        <strong>Single-job generation</strong>
-        <p>单任务生成、可随时停止，并保留下载与全屏查看能力。</p>
+      <div class="hero-card system-orbit-card">
+        <div class="system-orbit" aria-hidden="true">
+          <span class="orbit-core"></span>
+          <span class="orbit-ring orbit-ring-a"><i></i></span>
+          <span class="orbit-ring orbit-ring-b"><i></i></span>
+        </div>
+        <div class="system-orbit-copy">
+          <span class="hero-card-label"><i class="live-dot"></i> Render engine online</span>
+          <strong>Single-job generation</strong>
+          <p>专注当前灵感，随时停止并保留完整作品。</p>
+        </div>
+        <button id="effects-toggle" class="effects-toggle" type="button" aria-pressed="true">
+          <span class="effects-toggle-icon" aria-hidden="true">✦</span>
+          <span>氛围灯</span>
+        </button>
       </div>
     </header>
 
@@ -200,6 +217,23 @@ root.innerHTML = `
           <textarea id="prompt-input" rows="4" maxlength="2000"></textarea>
         </label>
 
+        <section class="inspiration-card" aria-labelledby="inspiration-title">
+          <div class="inspiration-head">
+            <div>
+              <span class="inspiration-kicker">Prompt sparks</span>
+              <strong id="inspiration-title">灵感增强器</strong>
+            </div>
+            <span class="inspiration-hint">点击注入</span>
+          </div>
+          <div class="prompt-sparks">
+            <button class="prompt-spark" type="button" data-prompt="电影级构图，体积光，细腻光影">电影感</button>
+            <button class="prompt-spark" type="button" data-prompt="未来主义美学，霓虹光晕，全息材质">未来霓虹</button>
+            <button class="prompt-spark" type="button" data-prompt="极简主义，大面积留白，柔和自然光">极简留白</button>
+            <button class="prompt-spark" type="button" data-prompt="超现实梦境，漂浮元素，诗意氛围">超现实</button>
+            <button class="prompt-spark" type="button" data-prompt="微距摄影，浅景深，精密纹理">微距细节</button>
+          </div>
+        </section>
+
         <div class="helper-note"><strong>Prompt 结构：</strong>主体 + 场景 + 光线 + 镜头语言 + 材质 + 风格关键词，通常比只堆风格词更稳定。</div>
 
         <div class="field-grid">
@@ -235,6 +269,24 @@ root.innerHTML = `
             </div>
           </label>
         </div>
+
+        <section class="parameter-hud" aria-label="实时参数概览">
+          <div class="hud-item">
+            <span class="hud-icon hud-icon-ratio" aria-hidden="true"></span>
+            <span class="hud-label">画幅</span>
+            <strong id="hud-ratio">—</strong>
+          </div>
+          <div class="hud-item">
+            <span class="hud-icon hud-icon-steps" aria-hidden="true"></span>
+            <span class="hud-label">精度</span>
+            <strong id="hud-steps">—</strong>
+          </div>
+          <div class="hud-item">
+            <span class="hud-icon hud-icon-guidance" aria-hidden="true"></span>
+            <span class="hud-label">引导</span>
+            <strong id="hud-guidance">—</strong>
+          </div>
+        </section>
 
         <div class="action-row action-row-primary">
           <button id="generate-btn" class="btn btn-primary" type="button" disabled>生成图像</button>
@@ -281,7 +333,18 @@ root.innerHTML = `
           </div>
 
           <div id="result-stage" class="result-stage" data-status="idle">
-            <div id="result-empty" class="result-empty">生成结果会显示在这里</div>
+            <div class="canvas-hud canvas-hud-top" aria-hidden="true"><span>LATENT SPACE</span><span>READY / 01</span></div>
+            <div class="canvas-hud canvas-hud-bottom" aria-hidden="true"><span>Z-IMAGE CORE</span><span>∞ CREATIVE FIELD</span></div>
+            <div id="result-empty" class="result-empty">
+              <div class="empty-reactor" aria-hidden="true">
+                <span class="reactor-ring reactor-ring-a"></span>
+                <span class="reactor-ring reactor-ring-b"></span>
+                <span class="reactor-core">Z</span>
+                <span class="reactor-scan"></span>
+              </div>
+              <strong>等待灵感坍缩成像</strong>
+              <span>输入你的想象，让潜空间开始运转</span>
+            </div>
             <div id="result-loading" class="result-loading" hidden>
               <div class="loading-card">
                 <span id="loading-eyebrow" class="loading-eyebrow">准备中</span>
@@ -317,6 +380,7 @@ function getElement<T extends Element>(selector: string): T {
 }
 
 const modelTitle = getElement<HTMLElement>("#model-title");
+const effectsToggle = getElement<HTMLButtonElement>("#effects-toggle");
 const modelBadge = getElement<HTMLElement>("#model-badge");
 const modelSelect = getElement<HTMLSelectElement>("#model-select");
 const modelMessage = getElement<HTMLSpanElement>("#model-message");
@@ -357,6 +421,9 @@ const loadingPercent = getElement<HTMLSpanElement>("#loading-percent");
 const loadingProgressFill = getElement<HTMLDivElement>("#loading-progress-fill");
 const loadingProgress = getElement<HTMLDivElement>("#loading-progress");
 const loadingStep = getElement<HTMLSpanElement>("#loading-step");
+const hudRatio = getElement<HTMLElement>("#hud-ratio");
+const hudSteps = getElement<HTMLElement>("#hud-steps");
+const hudGuidance = getElement<HTMLElement>("#hud-guidance");
 
 const state: ViewState = {
   config: null,
@@ -403,6 +470,24 @@ function setStatus(
 function syncSliderValues(): void {
   stepsValue.textContent = stepsInput.value;
   guidanceValue.textContent = Number(guidanceInput.value).toFixed(1);
+  hudSteps.textContent = stepsInput.value || "—";
+  hudGuidance.textContent = guidanceInput.value
+    ? Number(guidanceInput.value).toFixed(1)
+    : "—";
+}
+
+function syncParameterHud(): void {
+  hudRatio.textContent = ratioInput.value || "—";
+  syncSliderValues();
+}
+
+function injectPrompt(prompt: string): void {
+  const current = promptInput.value.trim();
+  const nextPrompt = current ? `${current}，${prompt}` : prompt;
+  promptInput.value = nextPrompt.slice(0, promptInput.maxLength);
+  promptInput.dispatchEvent(new Event("input", { bubbles: true }));
+  promptInput.focus();
+  promptInput.setSelectionRange(promptInput.value.length, promptInput.value.length);
 }
 
 function updatePromptCount(): void {
@@ -467,7 +552,7 @@ function resetParameters(): void {
   guidanceInput.value = String(state.config.defaults.guidance_scale);
   setSeedValue(state.config.defaults.initial_seed);
   localStorage.removeItem(PARAMETERS_STORAGE_KEY);
-  syncSliderValues();
+  syncParameterHud();
   syncRatioPresets();
   updatePromptCount();
   setStatus("创作参数已恢复默认值。", "idle");
@@ -691,6 +776,7 @@ function populateRatioOptions(config: AppConfig): void {
     button.addEventListener("click", () => {
       ratioInput.value = option.label;
       syncRatioPresets();
+      syncParameterHud();
       saveParameters();
     });
     ratioPresets.append(button);
@@ -892,7 +978,7 @@ async function loadConfig(): Promise<void> {
 
     restoreParameters();
 
-    syncSliderValues();
+    syncParameterHud();
     syncRatioPresets();
     updatePromptCount();
     setStatus("配置已加载，正在确认模型状态…", "loading");
@@ -1094,7 +1180,22 @@ promptInput.addEventListener("input", () => {
 });
 ratioInput.addEventListener("change", () => {
   syncRatioPresets();
+  syncParameterHud();
   saveParameters();
+});
+for (const spark of root.querySelectorAll<HTMLButtonElement>(".prompt-spark")) {
+  spark.addEventListener("click", () => {
+    const prompt = spark.dataset.prompt;
+    if (prompt) {
+      injectPrompt(prompt);
+    }
+  });
+}
+effectsToggle.addEventListener("click", () => {
+  const enabled = effectsToggle.getAttribute("aria-pressed") !== "true";
+  effectsToggle.setAttribute("aria-pressed", String(enabled));
+  effectsToggle.classList.toggle("is-off", !enabled);
+  document.body.classList.toggle("effects-muted", !enabled);
 });
 for (const input of [stepsInput, guidanceInput, seedInput]) {
   input.addEventListener("change", saveParameters);
